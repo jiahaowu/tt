@@ -34,32 +34,34 @@ func (e Entry) DurationMin() float64 {
 }
 
 type Data struct {
-	Entries []Entry `json:"entries"`
-	Current *Entry  `json:"current,omitempty"`
+	Entries          []Entry          `json:"entries"`
+	Current          *Entry           `json:"current,omitempty"`
+	CustomCategories map[string]string `json:"custom_categories,omitempty"`
 }
 
-var categories = []string{
+// Built-in categories
+var builtinCategories = []string{
 	"meeting", "code", "review", "plan", "admin", "side", "break", "other",
 }
 
-var categoryEmoji = map[string]string{
+var builtinEmoji = map[string]string{
 	"meeting": "📅", "code": "💻", "review": "👀", "plan": "🎯",
 	"admin": "📋", "side": "🚀", "break": "☕", "other": "❓",
 }
 
-var validCats map[string]bool
-
-func init() {
-	validCats = make(map[string]bool, len(categories))
-	for _, c := range categories {
-		validCats[c] = true
-	}
+// Emoji pool for auto-assigning to new custom categories
+var emojiPool = []string{
+	"🔧", "📝", "🎮", "📚", "🏋️", "🎵", "🎨", "🔬",
+	"🧪", "📊", "🔔", "💬", "🤖", "🏥", "🏠", "🚗",
+	"🌍", "⚡", "🔥", "💰", "🎯", "🧠", "⚙️", "📱",
+	"🖥️", "🔒", "🌐", "📦", "🎭", "🧩", "📈", "🌻",
 }
+
+var emojiPoolUsed int
 
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 func dataFilePath() string {
-	// Priority: current directory > home directory
 	local := filepath.Join(".", ".tt.json")
 	if _, err := os.Stat(local); err == nil {
 		return local
@@ -84,6 +86,9 @@ func loadData() (*Data, error) {
 	if err := json.Unmarshal(raw, &d); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
+	if d.CustomCategories == nil {
+		d.CustomCategories = make(map[string]string)
+	}
 	return &d, nil
 }
 
@@ -96,13 +101,75 @@ func saveData(d *Data) error {
 	return os.WriteFile(path, raw, 0644)
 }
 
+// ─── Category Helpers ───────────────────────────────────────────────────────
+
+func getEmoji(d *Data, category string) string {
+	if e, ok := builtinEmoji[category]; ok {
+		return e
+	}
+	if e, ok := d.CustomCategories[category]; ok {
+		return e
+	}
+	return "📌"
+}
+
+func getAllCategories(d *Data) []string {
+	all := make([]string, 0, len(builtinCategories)+len(d.CustomCategories))
+	all = append(all, builtinCategories...)
+	for c := range d.CustomCategories {
+		all = append(all, c)
+	}
+	return all
+}
+
+func resolveOrCreateCategory(d *Data, category string) string {
+	if d.CustomCategories == nil {
+		d.CustomCategories = make(map[string]string)
+	}
+
+	// Already known (builtin or custom)?
+	for _, c := range builtinCategories {
+		if c == category {
+			return category
+		}
+	}
+	if _, ok := d.CustomCategories[category]; ok {
+		return category
+	}
+
+	// New category — assign emoji from pool
+	used := make(map[string]bool)
+	for _, e := range builtinEmoji {
+		used[e] = true
+	}
+	for _, e := range d.CustomCategories {
+		used[e] = true
+	}
+
+	var emoji string
+	for _, e := range emojiPool {
+		if !used[e] {
+			emoji = e
+			break
+		}
+	}
+	if emoji == "" {
+		// Pool exhausted — use first char of category as fallback
+		emoji = "📌"
+	}
+
+	d.CustomCategories[category] = emoji
+	fmt.Printf("📌 New category created: %s %s\n", emoji, category)
+	return category
+}
+
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 func cmdStart(category, note string) {
 	category = strings.ToLower(strings.TrimSpace(category))
-	if !validCats[category] {
-		fmt.Printf("❌ Unknown category \"%s\"\n\nValid categories:\n", category)
-		cmdCategories()
+	if category == "" {
+		fmt.Println("Usage: tt start <category> [note]")
+		fmt.Println("Run `tt categories` to see available categories.")
 		os.Exit(1)
 	}
 
@@ -111,10 +178,18 @@ func cmdStart(category, note string) {
 		die("load data: %v", err)
 	}
 
+	// Resolve or create the category
+	resolveOrCreateCategory(d, category)
+
 	if d.Current != nil {
 		elapsed := d.Current.Duration()
-		fmt.Printf("⚠️  Already tracking: %s %s for %s\n", categoryEmoji[d.Current.Category], d.Current.Category, fmtDuration(elapsed))
+		fmt.Printf("⚠️  Already tracking: %s %s for %s\n", getEmoji(d, d.Current.Category), d.Current.Category, fmtDuration(elapsed))
 		fmt.Println("   Run `tt stop` first, or `tt stop` + `tt start` to switch.")
+		// Don't save the custom category in this case — but we already did above
+		// Actually let's still save it so it's registered
+		if err := saveData(d); err != nil {
+			die("save: %v", err)
+		}
 		os.Exit(1)
 	}
 
@@ -130,7 +205,7 @@ func cmdStart(category, note string) {
 	}
 
 	now := time.Now().Format("15:04")
-	fmt.Printf("%s %s started at %s", categoryEmoji[category], category, now)
+	fmt.Printf("%s %s started at %s", getEmoji(d, category), category, now)
 	if note != "" {
 		fmt.Printf(" — %s", note)
 	}
@@ -162,7 +237,7 @@ func cmdStop(note string) {
 
 	entry := d.Entries[len(d.Entries)-1]
 	fmt.Printf("✅ %s %s — %s (%s)\n",
-		categoryEmoji[entry.Category],
+		getEmoji(d, entry.Category),
 		entry.Category,
 		fmtDuration(time.Duration(entry.End-entry.Start) * time.Second),
 		entry.Note,
@@ -184,13 +259,12 @@ func cmdStatus() {
 	e := d.Current
 	elapsed := e.Duration()
 	fmt.Printf("%s %s — started at %s, elapsed: %s\n",
-		categoryEmoji[e.Category],
+		getEmoji(d, e.Category),
 		e.Category,
 		time.Unix(e.Start, 0).Format("15:04"),
 		fmtDuration(elapsed),
 	)
 
-	// Warning if sitting too long
 	if elapsed >= 2*time.Hour {
 		fmt.Printf("⚠️  You've been at this for %s. Time for a break?\n", fmtDuration(elapsed))
 	}
@@ -199,7 +273,6 @@ func cmdStatus() {
 		fmt.Printf("   📝 %s\n", e.Note)
 	}
 
-	// Today's summary
 	todayEntries := entriesSince(d.Entries, todayStart())
 	var todayTotal time.Duration
 	for _, entry := range todayEntries {
@@ -217,7 +290,6 @@ func cmdReport(period string, jsonOutput bool) {
 		die("load data: %v", err)
 	}
 
-	// Add current session to entries for calculation
 	allEntries := make([]Entry, len(d.Entries))
 	copy(allEntries, d.Entries)
 
@@ -248,11 +320,11 @@ func cmdReport(period string, jsonOutput bool) {
 	}
 
 	if jsonOutput {
-		printJSONReport(filtered, period)
+		printJSONReport(filtered, d, period)
 		return
 	}
 
-	printHumanReport(filtered, period)
+	printHumanReport(filtered, d, period)
 }
 
 func cmdLog(n int) {
@@ -267,15 +339,11 @@ func cmdLog(n int) {
 		allEntries = append(allEntries, *d.Current)
 	}
 
-	// Sort by start time, newest first
 	sort.Slice(allEntries, func(i, j int) bool {
 		return allEntries[i].Start > allEntries[j].Start
 	})
 
 	if n <= 0 || n > len(allEntries) {
-		n = len(allEntries)
-	}
-	if n > len(allEntries) {
 		n = len(allEntries)
 	}
 
@@ -290,7 +358,7 @@ func cmdLog(n int) {
 		} else {
 			end = " → now"
 		}
-		fmt.Printf("  %s %-8s %s%s  %5s", categoryEmoji[e.Category], e.Category, start.Format("Mon 01/02 15:04"), end, fmtDuration(dur))
+		fmt.Printf("  %s %-10s %s%s  %5s", getEmoji(d, e.Category), e.Category, start.Format("Mon 01/02 15:04"), end, fmtDuration(dur))
 		if e.Note != "" {
 			fmt.Printf("  — %s", e.Note)
 		}
@@ -299,10 +367,31 @@ func cmdLog(n int) {
 }
 
 func cmdCategories() {
-	fmt.Println("📦 Available categories:")
-	for _, c := range categories {
-		fmt.Printf("  %s %s\n", categoryEmoji[c], c)
+	d, err := loadData()
+	if err != nil {
+		die("load data: %v", err)
 	}
+
+	fmt.Println("📦 Available categories:\n")
+	fmt.Println("  Built-in:")
+	for _, c := range builtinCategories {
+		fmt.Printf("    %s %s\n", builtinEmoji[c], c)
+	}
+
+	if len(d.CustomCategories) > 0 {
+		fmt.Println("\n  Custom:")
+		// Sort custom categories for stable output
+		var customs []string
+		for c := range d.CustomCategories {
+			customs = append(customs, c)
+		}
+		sort.Strings(customs)
+		for _, c := range customs {
+			fmt.Printf("    %s %s\n", d.CustomCategories[c], c)
+		}
+	}
+
+	fmt.Println("\n  💡 Use any new name to auto-create a custom category.")
 }
 
 // ─── Report Formatters ──────────────────────────────────────────────────────
@@ -313,8 +402,7 @@ type catStat struct {
 	pct  float64
 }
 
-func printHumanReport(entries []Entry, period string) {
-	// Group by category
+func printHumanReport(entries []Entry, d *Data, period string) {
 	catTimes := make(map[string]float64)
 	for _, e := range entries {
 		catTimes[e.Category] += e.DurationMin()
@@ -325,14 +413,12 @@ func printHumanReport(entries []Entry, period string) {
 		totalMin += m
 	}
 
-	// Sort categories by time (descending)
 	var stats []catStat
 	for name, minutes := range catTimes {
 		stats = append(stats, catStat{name, minutes, (minutes / totalMin) * 100})
 	}
 	sort.Slice(stats, func(i, j int) bool { return stats[i].min > stats[j].min })
 
-	// Header
 	fmt.Printf("\n📊 %s Report\n", periodTitle(period))
 	if period == "week" {
 		fmt.Printf("   %s → %s\n\n", weekStart().Format("Mon Jan 02"), time.Now().Format("Mon Jan 02"))
@@ -350,25 +436,21 @@ func printHumanReport(entries []Entry, period string) {
 		bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
 		h := int(s.min / 60)
 		m := int(s.min) % 60
-		fmt.Printf("  %s %-8s %s  %2dh%02dm  (%5.1f%%)\n",
-			categoryEmoji[s.name], s.name, bar, h, m, s.pct)
+		fmt.Printf("  %s %-10s %s  %2dh%02dm  (%5.1f%%)\n",
+			getEmoji(d, s.name), s.name, bar, h, m, s.pct)
 	}
 
-	// Separator
-	fmt.Printf("  %s\n", strings.Repeat("─", 58))
+	fmt.Printf("  %s\n", strings.Repeat("─", 60))
 
-	// Total
 	th := int(totalMin / 60)
 	tm := int(totalMin) % 60
-	fmt.Printf("  %s %-8s            %2dh%02dm\n", "📊", "TOTAL", th, tm)
+	fmt.Printf("  📊 %-10s            %2dh%02dm\n", "TOTAL", th, tm)
 
-	// Insights
 	fmt.Println()
-	printInsights(entries, stats, totalMin)
+	printInsights(entries, d, stats, totalMin)
 }
 
-func printInsights(entries []Entry, stats []catStat, totalMin float64) {
-	// Meeting ratio
+func printInsights(entries []Entry, d *Data, stats []catStat, totalMin float64) {
 	meetingMin := 0.0
 	for _, s := range stats {
 		if s.name == "meeting" {
@@ -386,7 +468,6 @@ func printInsights(entries []Entry, stats []catStat, totalMin float64) {
 		fmt.Printf("  ✅ Meetings at %.0f%% — reasonable.\n", meetingPct)
 	}
 
-	// Deep work (code + review)
 	deepWorkMin := 0.0
 	for _, s := range stats {
 		if s.name == "code" || s.name == "review" || s.name == "plan" {
@@ -396,7 +477,6 @@ func printInsights(entries []Entry, stats []catStat, totalMin float64) {
 	deepPct := (deepWorkMin / totalMin) * 100
 	fmt.Printf("  💡 Deep work (code+review+plan): %.0f%%\n", deepPct)
 
-	// Side project time
 	sideMin := 0.0
 	for _, s := range stats {
 		if s.name == "side" {
@@ -410,7 +490,6 @@ func printInsights(entries []Entry, stats []catStat, totalMin float64) {
 		fmt.Println("  🔴 No side project time tracked this period.")
 	}
 
-	// Break time
 	breakMin := 0.0
 	for _, s := range stats {
 		if s.name == "break" {
@@ -422,7 +501,6 @@ func printInsights(entries []Entry, stats []catStat, totalMin float64) {
 		fmt.Println("  ☕ Break time is very low — take care of yourself.")
 	}
 
-	// Estimated wasted time (admin + other)
 	wastedMin := 0.0
 	for _, s := range stats {
 		if s.name == "admin" || s.name == "other" {
@@ -465,9 +543,10 @@ func printInsights(entries []Entry, stats []catStat, totalMin float64) {
 	}
 }
 
-func printJSONReport(entries []Entry, period string) {
+func printJSONReport(entries []Entry, d *Data, period string) {
 	type CatTotal struct {
 		Category string  `json:"category"`
+		Emoji    string  `json:"emoji"`
 		Minutes  float64 `json:"minutes"`
 		Percent  float64 `json:"percent"`
 	}
@@ -487,7 +566,7 @@ func printJSONReport(entries []Entry, period string) {
 
 	var cats []CatTotal
 	for name, minutes := range catTimes {
-		cats = append(cats, CatTotal{name, minutes, (minutes / totalMin) * 100})
+		cats = append(cats, CatTotal{name, getEmoji(d, name), minutes, (minutes / totalMin) * 100})
 	}
 	sort.Slice(cats, func(i, j int) bool { return cats[i].Minutes > cats[j].Minutes })
 
@@ -582,24 +661,26 @@ func printUsage() {
 	fmt.Println(`tt — minimal CLI time tracker
 
 Usage:
-  tt start <category> [note]    Start tracking time
+  tt start <category> [note]    Start tracking time (any new name auto-creates)
   tt stop [note]                Stop current session
   tt status                     Show current tracking info
   tt report [period]            Time report: today, week (default), month, all
   tt report --json [period]     Machine-readable JSON output
   tt log [N]                    Show last N entries (default: 10)
-  tt categories                 List available categories
+  tt categories                 List built-in + custom categories
 
 Categories:
   📅 meeting    💻 code       👀 review     🎯 plan
   📋 admin      🚀 side      ☕ break      ❓ other
 
-Data is stored in .tt.json in the current directory.`)
+  💡 Use any name to auto-create a custom category with emoji.
+
+Data is stored in ~/.tt.json by default (or .tt.json in current directory if it exists).`)
 }
 
 func main() {
 	if len(os.Args) < 2 {
-		printUsage()
+		cmdCategories()
 		os.Exit(0)
 	}
 
