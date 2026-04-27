@@ -72,7 +72,7 @@ tt log 20
 
 ## Data
 
-All data stored in `.tt.json` in the current directory. No server, no cloud. Copy the file to back up or transfer.
+Data is stored in ~/.tt.json by default (or .tt.json in current directory if it exists). No server, no cloud. Copy the file to back up or transfer.
 
 ## License
 

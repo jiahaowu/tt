@@ -59,13 +59,16 @@ func init() {
 // ─── Storage ─────────────────────────────────────────────────────────────────
 
 func dataFilePath() string {
-	// First check current directory
+	// Priority: current directory > home directory
 	local := filepath.Join(".", ".tt.json")
 	if _, err := os.Stat(local); err == nil {
 		return local
 	}
-	// Default: current directory (will create on first save)
-	return local
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return local
+	}
+	return filepath.Join(home, ".tt.json")
 }
 
 func loadData() (*Data, error) {
