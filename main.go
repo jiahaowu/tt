@@ -304,6 +304,12 @@ func cmdCategories() {
 
 // ─── Report Formatters ──────────────────────────────────────────────────────
 
+type catStat struct {
+	name string
+	min  float64
+	pct  float64
+}
+
 func printHumanReport(entries []Entry, period string) {
 	// Group by category
 	catTimes := make(map[string]float64)
@@ -317,11 +323,6 @@ func printHumanReport(entries []Entry, period string) {
 	}
 
 	// Sort categories by time (descending)
-	type catStat struct {
-		name string
-		min  float64
-		pct  float64
-	}
 	var stats []catStat
 	for name, minutes := range catTimes {
 		stats = append(stats, catStat{name, minutes, (minutes / totalMin) * 100})
