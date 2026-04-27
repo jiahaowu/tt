@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build all platforms
+        run: |
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o tt-darwin-amd64 .
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o tt-darwin-arm64 .
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o tt-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o tt-linux-arm64 .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o tt-windows-amd64.exe .
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tt-darwin-amd64
+            tt-darwin-arm64
+            tt-linux-amd64
+            tt-linux-arm64
+            tt-windows-amd64.exe
+          generate_release_notes: true
